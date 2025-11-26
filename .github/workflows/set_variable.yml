@@ -19,7 +19,7 @@ on:
         description: 'Openwrt package name'  
         required: true
       email:
-        description: 'Git accuont email address'  
+        description: 'Git account email address'  
         required: false
       password:
         description: 'Git account password'  
@@ -34,7 +34,25 @@ jobs:
       env:
         NODE_TLS_REJECT_UNAUTHORIZED: 0
 
-    - name: build ipk
+    - name: Setup environment and debug
+      run: |
+        echo "=== Workspace Debug Info ==="
+        echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+        cd "$GITHUB_WORKSPACE"
+        echo "Current directory: $(pwd)"
+        echo "Directory contents:"
+        ls -la
+        echo "=== Build script check ==="
+        if [ -f "./build.sh" ]; then
+          echo "build.sh found, checking content..."
+          head -20 ./build.sh
+          chmod +x ./build.sh
+        else
+          echo "ERROR: build.sh not found!"
+          exit 1
+        fi
+
+    - name: Build IPK with detailed logging
       id: build
       env:
         SOURCECODEURL: ${{ github.event.inputs.sourcecode }}
@@ -45,14 +63,70 @@ jobs:
         GIT_SSL_NO_VERIFY: true
         NODE_TLS_REJECT_UNAUTHORIZED: 0
       run: |
-        cd $GITHUB_WORKSPACE
-        chmod +x ./build.sh
-        ./build.sh
+        echo "=== Build Parameters ==="
+        echo "Source Code: $SOURCECODEURL"
+        echo "Package Name: $PKGNAME"
+        echo "Device: $BOARD"
         
-    - uses: actions/upload-artifact@v4
+        cd "$GITHUB_WORKSPACE"
+        echo "Starting build process..."
+        
+        # 使用 tee 同时输出到控制台和文件，并捕获退出码
+        set -o pipefail
+        ./build.sh 2>&1 | tee build_output.log
+        BUILD_EXIT_CODE=$?
+        
+        echo "Build process finished with exit code: $BUILD_EXIT_CODE"
+        
+        if [ $BUILD_EXIT_CODE -ne 0 ]; then
+          echo "=== BUILD FAILED ==="
+          echo "Last 30 lines of build output:"
+          tail -30 build_output.log
+          echo "=== Checking for common issues ==="
+          # 检查磁盘空间
+          df -h
+          # 检查内存使用
+          free -h || echo "free command not available"
+        else
+          echo "=== BUILD SUCCESS ==="
+          echo "Checking for generated IPK files:"
+          find . -name "*.ipk" -type f 2>/dev/null || echo "No IPK files found"
+        fi
+        
+        # 保存退出码供后续步骤使用
+        echo "exit_code=$BUILD_EXIT_CODE" >> $GITHUB_OUTPUT
+        exit $BUILD_EXIT_CODE
+
+    - name: Upload build logs (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.event.inputs.pkgname }}_related_ipks
+        name: build-failure-logs
         path: |
-          ./*ipk*
+          ./build_output.log
+        retention-days: 7
+
+    - name: Upload IPK artifacts (on success)
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.event.inputs.pkgname }}_${{ github.event.inputs.device }}_ipks
+        path: |
+          ./*.ipk
+          ./bin/packages/*/*/*.ipk
+          ./bin/targets/*/*/packages/*.ipk
+        retention-days: 30
       env:
         NODE_TLS_REJECT_UNAUTHORIZED: 0
+
+    - name: Final status
+      if: always()
+      run: |
+        echo "=== Workflow completed ==="
+        echo "Build step exit code: ${{ steps.build.outputs.exit_code }}"
+        if [ "${{ steps.build.outputs.exit_code }}" == "0" ]; then
+          echo "🎉 Build completed successfully!"
+        else
+          echo "❌ Build failed with exit code ${{ steps.build.outputs.exit_code }}"
+          echo "Check the build logs above for details."
+        fi
