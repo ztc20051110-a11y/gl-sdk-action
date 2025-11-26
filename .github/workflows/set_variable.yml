@@ -31,6 +31,8 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@master
+      env:
+        NODE_TLS_REJECT_UNAUTHORIZED: 0
 
     - name: build ipk
       id: build
@@ -40,13 +42,17 @@ jobs:
         BOARD: ${{ github.event.inputs.device }}
         EMAIL: ${{ github.event.inputs.email }}
         PASSWORD: ${{ github.event.inputs.password }}
+        GIT_SSL_NO_VERIFY: true
+        NODE_TLS_REJECT_UNAUTHORIZED: 0
       run: |
         cd $GITHUB_WORKSPACE
         chmod +x ./build.sh
         ./build.sh
-
+        
     - uses: actions/upload-artifact@v4
       with:
         name: ${{ github.event.inputs.pkgname }}_related_ipks
         path: |
           ./*ipk*
+      env:
+        NODE_TLS_REJECT_UNAUTHORIZED: 0
